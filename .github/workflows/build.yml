@@ -109,3 +109,55 @@ jobs:
           path: MUSLIM-VPS-CLOUD-${{ matrix.name }}.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  build-android-armv7:
+    name: Build android-armv7
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Setup Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1.6.0
+        with:
+          ndk-version: r27d
+          add-to-path: false
+
+      - name: Compile Android ARMv7
+        env:
+          GOOS: android
+          GOARCH: arm
+          GOARM: "7"
+          CGO_ENABLED: "1"
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
+          CXX: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang++
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${GITHUB_SHA}" \
+            -o dist/msc-vps-cloud-android-armv7 \
+            ./cmd/server
+
+      - name: Package
+        run: |
+          cd dist
+          tar -czf ../MUSLIM-VPS-CLOUD-android-armv7.tar.gz .
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MUSLIM-VPS-CLOUD-android-armv7
+          path: MUSLIM-VPS-CLOUD-android-armv7.tar.gz
+          if-no-files-found: error
+          retention-days: 14
