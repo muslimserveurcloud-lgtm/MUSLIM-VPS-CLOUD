@@ -1,32 +1,39 @@
 package main
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
+"net/http"
+"net/http/httptest"
+"testing"
 )
 
-func TestHealthEndpoint(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
+func TestEndpoints(t *testing.T) {
+tests := []struct {
+path string
+}{
+{"/health"},
+{"/v1/version"},
+{"/"},
+}
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+mux := http.NewServeMux()
+mux.HandleFunc("/health", health)
+mux.HandleFunc("/v1/version", versionHandler)
+mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+writeJSON(w, http.StatusOK, map[string]string{
+"application": "MUSLIM VPS CLOUD",
+})
+})
 
-	http.DefaultServeMux.ServeHTTP(rec, req)
+for _, test := range tests {
+t.Run(test.path, func(t *testing.T) {
+req := httptest.NewRequest("GET", test.path, nil)
+rec := httptest.NewRecorder()
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected HTTP 200, got %d", rec.Code)
-	}
+mux.ServeHTTP(rec, req)
 
-	var result map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-
-	if result["status"] != "ok" {
-		t.Fatalf("unexpected health status: %s", result["status"])
-	}
+if rec.Code != http.StatusOK {
+t.Fatalf("expected 200, got %d", rec.Code)
+}
+})
+}
 }

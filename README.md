@@ -1,36 +1,36 @@
 # MUSLIM VPS CLOUD
 
-Infrastructure hybride de gestion de serveurs et de services réseau.
+Hybrid cloud infrastructure management platform.
 
-## Architecture
+## Core architecture
 
-- API de gestion
-- Moteur serveur Linux
-- Gestion des utilisateurs
-- Gestion des serveurs
+- Cloud API
+- Virtual Core
+- VPS Lifecycle Engine
+- Network Management Engine
+- Security Engine
+- Resource Orchestration
 - Monitoring
-- Préparation des intégrations VPN
-- Compilation multi-plateforme par GitHub Actions
+- Web Dashboard
+- Android Management
 
-## Plateformes ciblées
-
-- Linux ARMv7
-- Linux ARM64
-- Linux x86_64
-- Windows x86_64 et ARM64
-- macOS Intel et Apple Silicon
-- Android ARMv7 et ARM64
-
-## API initiale
+## API
 
 - GET /health
 - GET /v1/version
 
-## Compilation
+## Build
 
-La compilation est effectuée automatiquement avec GitHub Actions.
+Compilation is automated using GitHub Actions.
 
-## Important
+Target architectures include Linux ARMv7, ARM64 and AMD64,
+Windows and macOS.
 
-La compilation ne fournit pas d'hébergement permanent, d'adresse IP publique
-ou de serveur VPS. Un hébergeur autorisé est nécessaire pour le déploiement.
+## Infrastructure
+
+The project aims to provide a software platform for managing
+persistent virtual server instances.
+
+GitHub Actions builds are not themselves permanent VPS hosting.
+A persistent compute provider or independently provisioned
+infrastructure is required for actual VPS instances.
