@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071321">
+<title>MUSLIM VPS CLOUD</title>
+<style>
+:root{color-scheme:dark;--bg:#071321;--panel:#101f30;--line:#24384b;--green:#16c784;--muted:#91a4b8;--white:#f4f8fc}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--white);font:15px system-ui,Arial,sans-serif}
+header{padding:20px 5%;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-weight:800;font-size:20px;letter-spacing:.5px}.brand span{color:var(--green)}
+.status{color:var(--green);font-size:13px}
+main{max-width:1150px;margin:auto;padding:28px 5%}
+h1{font-size:30px;margin:0 0 8px}h2{font-size:19px;margin:0 0 18px}
+.muted{color:var(--muted)}.notice{background:#172b3c;border:1px solid var(--line);padding:14px;border-radius:12px;margin:20px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.metric{font-size:27px;font-weight:800;margin-top:8px}
+section{margin-top:28px}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+input{width:100%;padding:12px;background:#091726;border:1px solid var(--line);border-radius:8px;color:white}
+button{border:0;border-radius:8px;padding:11px 15px;background:var(--green);color:#06150f;font-weight:700;cursor:pointer}
+button.secondary{background:#263b50;color:white}
+button.danger{background:#9e3945;color:white}
+button:disabled{opacity:.5;cursor:not-allowed}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:550px}
+th,td{text-align:left;padding:13px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600}
+.actions{display:flex;gap:7px;flex-wrap:wrap}
+.actions button{padding:8px 10px;font-size:12px}
+#message{margin-top:14px;color:var(--green);min-height:22px}
+footer{padding:25px 5%;text-align:center;color:var(--muted);border-top:1px solid var(--line);margin-top:35px}
+@media(max-width:600px){h1{font-size:25px}main{padding-top:22px}}
+</style>
+</head>
+<body>
+<header>
+ <div class="brand">MUSLIM <span>VPS CLOUD</span></div>
+ <div class="status" id="connection">● Connexion à l'API…</div>
+</header>
+<main>
+ <h1>Tableau de bord</h1>
+ <p class="muted">Gérez vos instances et consultez les ressources disponibles.</p>
+ <div class="notice">
+  <strong>État de la plateforme</strong>
+  <p class="muted" id="mode">Vérification du moteur…</p>
+  <p class="muted">Le mode simulation ne crée pas de véritable machine virtuelle. Un hôte Linux KVM est nécessaire pour le provisionnement réel.</p>
+ </div>
+ <div class="grid">
+  <div class="card"><div class="muted">Instances VPS</div><div class="metric" id="count">—</div></div>
+  <div class="card"><div class="muted">vCPU utilisés</div><div class="metric" id="cpu">—</div></div>
+  <div class="card"><div class="muted">Mémoire utilisée</div><div class="metric" id="memory">—</div></div>
+  <div class="card"><div class="muted">Stockage utilisé</div><div class="metric" id="storage">—</div></div>
+ </div>
+ <section class="card">
+  <h2>Créer une instance VPS</h2>
+  <form id="createForm">
+   <input id="name" placeholder="Nom du VPS" required maxlength="60">
+   <input id="vcpu" type="number" min="1" value="1" placeholder="vCPU" required>
+   <input id="ram" type="number" min="1" value="1024" placeholder="RAM en MB" required>
+   <input id="disk" type="number" min="1" value="10" placeholder="Disque en GB" required>
+   <button type="submit">Créer le VPS</button>
+  </form>
+  <div id="message" role="status"></div>
+ </section>
+ <section class="card">
+  <h2>Mes instances</h2>
+  <div class="tablewrap">
+   <table>
+    <thead><tr><th>Nom</th><th>Identifiant</th><th>État</th><th>Actions</th></tr></thead>
+    <tbody id="instances"><tr><td colspan="4" class="muted">Chargement…</td></tr></tbody>
+   </table>
+  </div>
+ </section>
+ <section class="card">
+  <h2>Informations système</h2>
+  <p class="muted" id="version">Version : chargement…</p>
+  <p class="muted" id="capacity">Capacité : chargement…</p>
+ </section>
+</main>
+<footer>MUSLIM VPS CLOUD · Infrastructure de gestion VPS</footer>
+<script>
+const $=id=>document.getElementById(id);
+async function api(path,options={}){
+ const response=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});
+ if(!response.ok){let message='Erreur HTTP '+response.status;try{const data=await response.json();message=data.error||message}catch{}throw new Error(message)}
+ if(response.status===204)return null;
+ return response.json();
+}
+function say(message,error=false){$('message').textContent=message;$('message').style.color=error?'#ff8585':'#16c784'}
+function safe(value){const e=document.createElement('span');e.textContent=value??'';return e.innerHTML}
+async function refresh(){
+ try{
+  const [instances,resources,version,hypervisor]=await Promise.all([
+   api('/v1/instances'),api('/v1/resources'),api('/v1/version'),api('/v1/hypervisor')
+  ]);
+  $('connection').textContent='● API connectée';
+  $('connection').style.color='#16c784';
+  const list=instances.instances||[];
+  $('count').textContent=list.length;
+  $('cpu').textContent=resources.used.vcpu+' / '+resources.capacity.vcpu;
+  $('memory').textContent=resources.used.memory_mb+' / '+resources.capacity.memory_mb+' MB';
+  $('storage').textContent=resources.used.storage_gb+' / '+resources.capacity.storage_gb+' GB';
+  $('mode').textContent='Moteur actif : '+hypervisor.mode;
+  $('version').textContent='Version : '+version.version+' · '+version.os+'/'+version.architecture;
+  $('capacity').textContent=resources.configured?'Capacité configurée':'Aucune capacité de ressources configurée. Configurez MSC_CAPACITY_VCPU, MSC_CAPACITY_MEMORY_MB et MSC_CAPACITY_STORAGE_GB.';
+  $('instances').innerHTML=list.length?list.map(v=>`<tr>
+   <td>${safe(v.name)}</td><td>${safe(v.id)}</td><td>${safe(v.state)}</td>
+   <td><div class="actions">
+    <button data-action="start" data-id="${safe(v.id)}">Démarrer</button>
+    <button class="secondary" data-action="stop" data-id="${safe(v.id)}">Arrêter</button>
+    <button class="secondary" data-action="restart" data-id="${safe(v.id)}">Redémarrer</button>
+    <button class="danger" data-action="delete" data-id="${safe(v.id)}">Supprimer</button>
+   </div></td></tr>`).join(''):'<tr><td colspan="4" class="muted">Aucune instance pour le moment.</td></tr>';
+ }catch(error){
+  $('connection').textContent='● API indisponible';
+  $('connection').style.color='#ff8585';
+  say(error.message,true);
+ }
+}
+$('createForm').addEventListener('submit',async event=>{
+ event.preventDefault();
+ try{
+  await api('/v1/instances',{method:'POST',body:JSON.stringify({
+   name:$('name').value.trim(),
+   resources:{vcpu:Number($('vcpu').value),memory_mb:Number($('ram').value),storage_gb:Number($('disk').value)}
+  })});
+  say('Instance créée.');
+  $('createForm').reset();$('vcpu').value=1;$('ram').value=1024;$('disk').value=10;
+  await refresh();
+ }catch(error){say(error.message,true)}
+});
+$('instances').addEventListener('click',async event=>{
+ const button=event.target.closest('button[data-action]');
+ if(!button)return;
+ const {action,id}=button.dataset;
+ if(action==='delete'&&!confirm('Supprimer cette instance ?'))return;
+ button.disabled=true;
+ try{
+  await api('/v1/instances/'+encodeURIComponent(id)+(action==='delete'?'':'/'+action),{method:action==='delete'?'DELETE':'POST'});
+  say('Action effectuée : '+action);await refresh();
+ }catch(error){say(error.message,true);button.disabled=false}
+});
+refresh();
+</script>
+</body>
+</html>

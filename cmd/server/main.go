@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,9 @@ import (
 	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/hypervisor"
 	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/virtual"
 )
+
+//go:embed web/index.html
+var dashboardHTML embed.FS
 
 var version = "1.0.0"
 
@@ -193,10 +197,15 @@ func newRouter(s *virtual.Store, m *engine.Manager) http.Handler {
 	mux.HandleFunc("POST /v1/instances/{id}/stop", a.stopInstance)
 	mux.HandleFunc("POST /v1/instances/{id}/restart", a.restartInstance)
 	mux.HandleFunc("DELETE /v1/instances/{id}", a.deleteInstance)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"application": "MUSLIM VPS CLOUD", "message": "Cloud infrastructure API is running", "health": "/health", "version": "/v1/version"})
-	})
-	return mux
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			http.ServeFileFS(w, r, dashboardHTML, "web/index.html")
+		})
+		return mux
 }
 func envInt(k string) (int, error) {
 	v := os.Getenv(k)
