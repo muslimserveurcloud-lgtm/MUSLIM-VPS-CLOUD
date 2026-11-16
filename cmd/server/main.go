@@ -220,15 +220,24 @@ func (a *apiServer) instanceAction(
 }
 
 func (a *apiServer) startInstance(w http.ResponseWriter, r *http.Request) {
-	a.instanceAction(w, r, a.manager.Start, "start")
+	a.instanceAction(w, r, func(id string) error {
+		_, err := a.manager.Start(id)
+		return err
+	}, "start")
 }
 
 func (a *apiServer) stopInstance(w http.ResponseWriter, r *http.Request) {
-	a.instanceAction(w, r, a.manager.Stop, "stop")
+	a.instanceAction(w, r, func(id string) error {
+		_, err := a.manager.Stop(id)
+		return err
+	}, "stop")
 }
 
 func (a *apiServer) restartInstance(w http.ResponseWriter, r *http.Request) {
-	a.instanceAction(w, r, a.manager.Restart, "restart")
+	a.instanceAction(w, r, func(id string) error {
+		_, err := a.manager.Restart(id)
+		return err
+	}, "restart")
 }
 
 func (a *apiServer) deleteInstance(w http.ResponseWriter, r *http.Request) {
