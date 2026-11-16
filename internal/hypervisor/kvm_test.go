@@ -31,8 +31,10 @@ func (f *kvmFakeRunner) Run(ctx context.Context, name string, args ...string) ([
 		}
 	}
 
-	if len(args) > 0 && args[0] == "domstate" {
-		return []byte(f.state), nil
+	for _, arg := range args {
+		if arg == "domstate" {
+			return []byte(f.state), nil
+		}
 	}
 
 	return []byte("ok"), nil
