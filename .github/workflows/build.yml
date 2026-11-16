@@ -22,7 +22,12 @@ jobs:
           cache: true
       - name: Format check
         run: |
-          test -z "$(gofmt -l .)"
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "Fichiers a formater :"
+            printf '%s\n' "$files"
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Unit tests
