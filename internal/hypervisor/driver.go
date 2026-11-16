@@ -54,3 +54,19 @@ func ValidateSpec(s Spec) error {
 	}
 	return nil
 }
+
+// ValidateID checks whether a virtual machine ID is valid.
+func ValidateID(id string) error {
+    if id == "" {
+        return ErrInvalidSpec
+    }
+    for _, r := range id {
+        if !((r >= 'a' && r <= 'z') ||
+             (r >= 'A' && r <= 'Z') ||
+             (r >= '0' && r <= '9') ||
+             r == '-' || r == '_') {
+            return ErrInvalidSpec
+        }
+    }
+    return nil
+}
