@@ -1,9 +1,9 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,14 +11,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/hypervisor"
 	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/virtual"
 )
 
 var (
-	ErrNotFound        = errors.New("instance not found")
-	ErrInvalidState    = errors.New("invalid instance state transition")
-	ErrInvalidName     = errors.New("instance name is required")
-	ErrStoragePath     = errors.New("storage path is required")
+	ErrNotFound     = errors.New("instance not found")
+	ErrInvalidState = errors.New("invalid instance state transition")
+	ErrInvalidName  = errors.New("instance name is required")
+	ErrStoragePath  = errors.New("storage path is required")
 )
 
 const (
@@ -35,256 +36,226 @@ type Instance struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 }
-
 type diskState struct {
 	Instances []Instance `json:"instances"`
 }
-
 type Manager struct {
 	mu        sync.Mutex
 	path      string
 	allocator *virtual.Store
+	driver    hypervisor.Driver
 	instances map[string]Instance
 }
 
-func NewManager(path string, allocator *virtual.Store) (*Manager, error) {
+func NewManager(path string, a *virtual.Store) (*Manager, error) {
+	return NewManagerWithDriver(path, a, nil)
+}
+func NewManagerWithDriver(path string, a *virtual.Store, d hypervisor.Driver) (*Manager, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, ErrStoragePath
 	}
-	if allocator == nil {
+	if a == nil {
 		return nil, errors.New("virtual resource allocator is required")
 	}
-
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
-		return nil, fmt.Errorf("create engine storage directory: %w", err)
-	}
-
-	m := &Manager{
-		path:      path,
-		allocator: allocator,
-		instances: make(map[string]Instance),
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read instances: %w", err)
-	}
-
-	if err == nil {
-		var state diskState
-		if err := json.Unmarshal(data, &state); err != nil {
-			return nil, fmt.Errorf("decode instances: %w", err)
-		}
-
-		for _, instance := range state.Instances {
-			if instance.ID == "" {
-				return nil, errors.New("stored instance has no ID")
-			}
-			if instance.State != StateRunning && instance.State != StateStopped {
-				return nil, errors.New("stored instance has invalid state")
-			}
-			if _, exists := m.instances[instance.ID]; exists {
-				return nil, errors.New("duplicate stored instance ID")
-			}
-			m.instances[instance.ID] = instance
-		}
-	} else if err := m.saveLocked(); err != nil {
 		return nil, err
 	}
-
+	m := &Manager{path: path, allocator: a, driver: d, instances: map[string]Instance{}}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		var state diskState
+		if err = json.Unmarshal(b, &state); err != nil {
+			return nil, err
+		}
+		for _, i := range state.Instances {
+			if i.ID == "" || (i.State != StateRunning && i.State != StateStopped) {
+				return nil, errors.New("invalid stored instance")
+			}
+			if _, ok := m.instances[i.ID]; ok {
+				return nil, errors.New("duplicate instance ID")
+			}
+			m.instances[i.ID] = i
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	} else if err = m.saveLocked(); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
-
-func (m *Manager) Create(name string, resources virtual.Resources) (Instance, error) {
+func (m *Manager) DriverName() string {
+	if m.driver == nil {
+		return "simulation"
+	}
+	return m.driver.Name()
+}
+func (m *Manager) Create(name string, r virtual.Resources) (Instance, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Instance{}, ErrInvalidName
 	}
-
-	allocation, err := m.allocator.Create(name, resources)
+	a, err := m.allocator.Create(name, r)
 	if err != nil {
 		return Instance{}, err
 	}
-
-	now := time.Now().UTC()
-	instance := Instance{
-		ID:        allocation.ID,
-		Name:      allocation.Name,
-		Resources: allocation.Resources,
-		State:     StateStopped,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	m.instances[instance.ID] = instance
-
-	if err := m.saveLocked(); err != nil {
-		delete(m.instances, instance.ID)
-		if rollbackErr := m.allocator.Delete(instance.ID); rollbackErr != nil {
-			return Instance{}, fmt.Errorf(
-				"save instance: %w; allocation rollback failed: %v",
-				err, rollbackErr,
-			)
+	i := Instance{ID: a.ID, Name: a.Name, Resources: a.Resources, State: StateStopped, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if m.driver != nil {
+		if err = m.driver.Create(context.Background(), hypervisor.Spec{ID: i.ID, Name: i.Name, Resources: i.Resources}); err != nil {
+			_ = m.allocator.Delete(i.ID)
+			return Instance{}, err
 		}
+	}
+	m.instances[i.ID] = i
+	if err = m.saveLocked(); err != nil {
+		delete(m.instances, i.ID)
+		if m.driver != nil {
+			_ = m.driver.Delete(context.Background(), i.ID)
+		}
+		_ = m.allocator.Delete(i.ID)
 		return Instance{}, err
 	}
-
-	return instance, nil
+	return i, nil
 }
-
 func (m *Manager) Get(id string) (Instance, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	instance, ok := m.instances[id]
+	i, ok := m.instances[id]
 	if !ok {
 		return Instance{}, ErrNotFound
 	}
-	return instance, nil
+	return i, nil
 }
-
 func (m *Manager) List() []Instance {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	result := make([]Instance, 0, len(m.instances))
-	for _, instance := range m.instances {
-		result = append(result, instance)
+	out := make([]Instance, 0, len(m.instances))
+	for _, i := range m.instances {
+		out = append(out, i)
 	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
-	})
-	return result
+	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })
+	return out
 }
-
 func (m *Manager) Start(id string) (Instance, error) {
 	return m.transition(id, StateStopped, StateRunning)
 }
-
 func (m *Manager) Stop(id string) (Instance, error) {
 	return m.transition(id, StateRunning, StateStopped)
 }
-
 func (m *Manager) Restart(id string) (Instance, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	instance, ok := m.instances[id]
+	i, ok := m.instances[id]
 	if !ok {
 		return Instance{}, ErrNotFound
 	}
-	if instance.State != StateRunning {
+	if i.State != StateRunning {
 		return Instance{}, ErrInvalidState
 	}
-
-	previous := instance
-	instance.RestartCount++
-	instance.UpdatedAt = time.Now().UTC()
-	m.instances[id] = instance
-
+	if m.driver != nil {
+		if err := m.driver.Restart(context.Background(), id); err != nil {
+			return Instance{}, err
+		}
+	}
+	old := i
+	i.RestartCount++
+	i.UpdatedAt = time.Now().UTC()
+	m.instances[id] = i
 	if err := m.saveLocked(); err != nil {
-		m.instances[id] = previous
+		m.instances[id] = old
 		return Instance{}, err
 	}
-
-	return instance, nil
+	return i, nil
 }
-
-func (m *Manager) transition(id, expected, next string) (Instance, error) {
+func (m *Manager) transition(id, from, to string) (Instance, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	instance, ok := m.instances[id]
+	i, ok := m.instances[id]
 	if !ok {
 		return Instance{}, ErrNotFound
 	}
-	if instance.State != expected {
+	if i.State != from {
 		return Instance{}, ErrInvalidState
 	}
-
-	previous := instance
-	instance.State = next
-	instance.UpdatedAt = time.Now().UTC()
-	m.instances[id] = instance
-
+	if m.driver != nil {
+		var err error
+		if to == StateRunning {
+			err = m.driver.Start(context.Background(), id)
+		} else {
+			err = m.driver.Stop(context.Background(), id)
+		}
+		if err != nil {
+			return Instance{}, err
+		}
+	}
+	old := i
+	i.State = to
+	i.UpdatedAt = time.Now().UTC()
+	m.instances[id] = i
 	if err := m.saveLocked(); err != nil {
-		m.instances[id] = previous
+		m.instances[id] = old
+		if m.driver != nil {
+			if to == StateRunning {
+				_ = m.driver.Stop(context.Background(), id)
+			} else {
+				_ = m.driver.Start(context.Background(), id)
+			}
+		}
 		return Instance{}, err
 	}
-
-	return instance, nil
+	return i, nil
 }
-
 func (m *Manager) Delete(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	instance, ok := m.instances[id]
+	i, ok := m.instances[id]
 	if !ok {
 		return ErrNotFound
 	}
-	if instance.State != StateStopped {
+	if i.State != StateStopped {
 		return ErrInvalidState
 	}
-
-	delete(m.instances, id)
-
-	if err := m.saveLocked(); err != nil {
-		m.instances[id] = instance
-		return err
-	}
-
-	if err := m.allocator.Delete(id); err != nil {
-		m.instances[id] = instance
-		if rollbackErr := m.saveLocked(); rollbackErr != nil {
-			return fmt.Errorf("delete allocation: %w; restore instance: %v", err, rollbackErr)
+	if m.driver != nil {
+		if err := m.driver.Delete(context.Background(), id); err != nil {
+			return err
 		}
+	}
+	if err := m.allocator.Delete(id); err != nil {
 		return err
 	}
-
+	delete(m.instances, id)
+	if err := m.saveLocked(); err != nil {
+		m.instances[id] = i
+		return err
+	}
 	return nil
 }
-
 func (m *Manager) saveLocked() error {
-	state := diskState{
-		Instances: make([]Instance, 0, len(m.instances)),
+	s := diskState{Instances: make([]Instance, 0, len(m.instances))}
+	for _, i := range m.instances {
+		s.Instances = append(s.Instances, i)
 	}
-
-	for _, instance := range m.instances {
-		state.Instances = append(state.Instances, instance)
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
+	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode instances: %w", err)
+		return err
 	}
-
 	tmp, err := os.CreateTemp(filepath.Dir(m.path), ".instances-*")
 	if err != nil {
-		return fmt.Errorf("create temporary instance storage: %w", err)
+		return err
 	}
-
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(data); err != nil {
+	n := tmp.Name()
+	defer os.Remove(n)
+	if _, err = tmp.Write(b); err != nil {
 		tmp.Close()
-		return fmt.Errorf("write instances: %w", err)
+		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err = tmp.Sync(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("sync instances: %w", err)
+		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close instances: %w", err)
+	if err = tmp.Close(); err != nil {
+		return err
 	}
-	if err := os.Rename(tmpName, m.path); err != nil {
-		return fmt.Errorf("save instances: %w", err)
-	}
-
-	return nil
+	return os.Rename(n, m.path)
 }

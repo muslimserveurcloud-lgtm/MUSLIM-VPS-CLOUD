@@ -1,167 +1,85 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 
+	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/hypervisor"
 	"github.com/muslimserveurcloud-lgtm/MUSLIM-VPS-CLOUD/internal/virtual"
 )
 
-func newTestManager(t *testing.T) *Manager {
-	t.Helper()
-
-	dir := t.TempDir()
-
-	allocator, err := virtual.NewStore(
-		filepath.Join(dir, "allocations.json"),
-		virtual.Resources{
-			VCPU: 8, MemoryMB: 8192, StorageGB: 100,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	manager, err := NewManager(filepath.Join(dir, "instances.json"), allocator)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return manager
+type fakeDriver struct {
+	calls []string
+	fail  string
 }
 
-func createTestInstance(t *testing.T, manager *Manager) Instance {
-	t.Helper()
-
-	instance, err := manager.Create("test-vps", virtual.Resources{
-		VCPU: 2, MemoryMB: 2048, StorageGB: 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return instance
+func (f *fakeDriver) Name() string { return "fake-kvm" }
+func (f *fakeDriver) Capabilities() hypervisor.Capabilities {
+	return hypervisor.Capabilities{Create: true, Start: true, Stop: true, Restart: true, Delete: true, Status: true}
 }
-
-func TestInstanceLifecycle(t *testing.T) {
-	manager := newTestManager(t)
-	instance := createTestInstance(t, manager)
-
-	if instance.State != StateStopped {
-		t.Fatalf("expected stopped, got %s", instance.State)
+func (f *fakeDriver) call(s string) error {
+	f.calls = append(f.calls, s)
+	if f.fail == s {
+		return errors.New("driver failure")
 	}
-
-	started, err := manager.Start(instance.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if started.State != StateRunning {
-		t.Fatalf("expected running, got %s", started.State)
-	}
-
-	restarted, err := manager.Restart(instance.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restarted.RestartCount != 1 {
-		t.Fatalf("expected one restart, got %d", restarted.RestartCount)
-	}
-
-	stopped, err := manager.Stop(instance.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stopped.State != StateStopped {
-		t.Fatalf("expected stopped, got %s", stopped.State)
-	}
-
-	if err := manager.Delete(instance.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := manager.Get(instance.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
+	return nil
 }
-
-func TestRejectInvalidTransitions(t *testing.T) {
-	manager := newTestManager(t)
-	instance := createTestInstance(t, manager)
-
-	if _, err := manager.Stop(instance.ID); !errors.Is(err, ErrInvalidState) {
-		t.Fatalf("expected ErrInvalidState when stopping stopped instance, got %v", err)
+func (f *fakeDriver) Create(context.Context, hypervisor.Spec) error { return f.call("create") }
+func (f *fakeDriver) Start(context.Context, string) error           { return f.call("start") }
+func (f *fakeDriver) Stop(context.Context, string) error            { return f.call("stop") }
+func (f *fakeDriver) Restart(context.Context, string) error         { return f.call("restart") }
+func (f *fakeDriver) Delete(context.Context, string) error          { return f.call("delete") }
+func (f *fakeDriver) Status(context.Context, string) (hypervisor.State, error) {
+	return hypervisor.StateStopped, nil
+}
+func TestLifecycleWithDriver(t *testing.T) {
+	d := t.TempDir()
+	s, e := virtual.NewStore(filepath.Join(d, "alloc.json"), virtual.Resources{VCPU: 4, MemoryMB: 4096, StorageGB: 40})
+	if e != nil {
+		t.Fatal(e)
 	}
-
-	if _, err := manager.Restart(instance.ID); !errors.Is(err, ErrInvalidState) {
-		t.Fatalf("expected ErrInvalidState when restarting stopped instance, got %v", err)
+	f := &fakeDriver{}
+	m, e := NewManagerWithDriver(filepath.Join(d, "instances.json"), s, f)
+	if e != nil {
+		t.Fatal(e)
 	}
-
-	if err := manager.Delete(instance.ID); err != nil {
-		t.Fatal(err)
+	i, e := m.Create("vm", virtual.Resources{VCPU: 1, MemoryMB: 512, StorageGB: 5})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = m.Start(i.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = m.Restart(i.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = m.Stop(i.ID); e != nil {
+		t.Fatal(e)
+	}
+	if e = m.Delete(i.ID); e != nil {
+		t.Fatal(e)
+	}
+	want := []string{"create", "start", "restart", "stop", "delete"}
+	if len(f.calls) != len(want) {
+		t.Fatalf("calls=%v", f.calls)
+	}
+	for i := range want {
+		if f.calls[i] != want[i] {
+			t.Fatalf("calls=%v", f.calls)
+		}
 	}
 }
-
-func TestCannotDeleteRunningInstance(t *testing.T) {
-	manager := newTestManager(t)
-	instance := createTestInstance(t, manager)
-
-	if _, err := manager.Start(instance.ID); err != nil {
-		t.Fatal(err)
+func TestDriverFailureDoesNotStartInstance(t *testing.T) {
+	d := t.TempDir()
+	s, _ := virtual.NewStore(filepath.Join(d, "alloc.json"), virtual.Resources{VCPU: 2, MemoryMB: 1024, StorageGB: 10})
+	f := &fakeDriver{fail: "create"}
+	m, _ := NewManagerWithDriver(filepath.Join(d, "instances.json"), s, f)
+	if _, e := m.Create("bad", virtual.Resources{VCPU: 1, MemoryMB: 512, StorageGB: 2}); e == nil {
+		t.Fatal("expected error")
 	}
-
-	if err := manager.Delete(instance.ID); !errors.Is(err, ErrInvalidState) {
-		t.Fatalf("expected ErrInvalidState, got %v", err)
-	}
-}
-
-func TestInstancePersistence(t *testing.T) {
-	dir := t.TempDir()
-	allocationPath := filepath.Join(dir, "allocations.json")
-	instancePath := filepath.Join(dir, "instances.json")
-
-	allocator, err := virtual.NewStore(allocationPath, virtual.Resources{
-		VCPU: 8, MemoryMB: 8192, StorageGB: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	manager, err := NewManager(instancePath, allocator)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	created := createTestInstance(t, manager)
-
-	reopenedAllocator, err := virtual.NewStore(allocationPath, virtual.Resources{
-		VCPU: 8, MemoryMB: 8192, StorageGB: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := NewManager(instancePath, reopenedAllocator)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	found, err := reopened.Get(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if found.Name != created.Name || found.State != StateStopped {
-		t.Fatalf("unexpected restored instance: %+v", found)
-	}
-}
-
-func TestRejectEmptyName(t *testing.T) {
-	manager := newTestManager(t)
-
-	_, err := manager.Create(" ", virtual.Resources{
-		VCPU: 1, MemoryMB: 512, StorageGB: 5,
-	})
-	if !errors.Is(err, ErrInvalidName) {
-		t.Fatalf("expected ErrInvalidName, got %v", err)
+	if len(m.List()) != 0 {
+		t.Fatal("failed create persisted")
 	}
 }

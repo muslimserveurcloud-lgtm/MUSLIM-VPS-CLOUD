@@ -3,6 +3,8 @@ name: MUSLIM VPS CLOUD BUILD
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -10,154 +12,58 @@ permissions:
 
 jobs:
   test:
-    name: Tests
+    name: Tests and static checks
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: true
+      - name: Format check
+        run: |
+          test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test -race ./...
+      - name: Build server
+        run: go build ./cmd/server
 
-      - name: Test
-        run: go test ./...
-
-  build:
-    name: Build ${{ matrix.name }}
-    needs: test
+  cross-build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-amd64
-            goos: linux
-            goarch: amd64
-            goarm: ""
-          - name: linux-arm64
-            goos: linux
-            goarch: arm64
-            goarm: ""
-          - name: linux-armv7
-            goos: linux
-            goarch: arm
-            goarm: "7"
-          - name: windows-amd64
-            goos: windows
-            goarch: amd64
-            goarm: ""
-          - name: windows-arm64
-            goos: windows
-            goarch: arm64
-            goarm: ""
-          - name: macos-amd64
-            goos: darwin
-            goarch: amd64
-            goarm: ""
-          - name: macos-arm64
-            goos: darwin
-            goarch: arm64
-            goarm: ""
-          - name: android-arm64
-            goos: android
-            goarch: arm64
-            goarm: ""
-
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: linux, goarch: arm, goarm: '7'}
+          - {goos: windows, goarch: amd64}
+          - {goos: windows, goarch: arm64}
+          - {goos: darwin, goarch: amd64}
+          - {goos: darwin, goarch: arm64}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: true
-
       - name: Compile
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: '0'
         run: |
           mkdir -p dist
-          EXT=""
-          if [ "$GOOS" = "windows" ]; then
-            EXT=".exe"
-          fi
-
-          go build \
-            -trimpath \
-            -ldflags="-s -w -X main.version=${GITHUB_SHA}" \
-            -o "dist/msc-vps-cloud-${{ matrix.name }}${EXT}" \
-            ./cmd/server
-
-      - name: Package
-        run: |
-          cd dist
-          tar -czf "../MUSLIM-VPS-CLOUD-${{ matrix.name }}.tar.gz" .
-
-      - name: Upload build
-        uses: actions/upload-artifact@v4
+          suffix=""
+          if [ "$GOOS" = windows ]; then suffix=".exe"; fi
+          go build -trimpath -ldflags="-s -w" -o "dist/msc-server-${GOOS}-${GOARCH}${suffix}" ./cmd/server
+      - uses: actions/upload-artifact@v4
         with:
-          name: MUSLIM-VPS-CLOUD-${{ matrix.name }}
-          path: MUSLIM-VPS-CLOUD-${{ matrix.name }}.tar.gz
-          if-no-files-found: error
-          retention-days: 14
-
-  build-android-armv7:
-    name: Build android-armv7
-    needs: test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Setup Android NDK
-        id: ndk
-        uses: nttld/setup-ndk@v1.6.0
-        with:
-          ndk-version: r27d
-          add-to-path: false
-
-      - name: Compile Android ARMv7
-        env:
-          GOOS: android
-          GOARCH: arm
-          GOARM: "7"
-          CGO_ENABLED: "1"
-          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-          CC: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
-          CXX: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang++
-        run: |
-          mkdir -p dist
-          go build \
-            -trimpath \
-            -ldflags="-s -w -X main.version=${GITHUB_SHA}" \
-            -o dist/msc-vps-cloud-android-armv7 \
-            ./cmd/server
-
-      - name: Package
-        run: |
-          cd dist
-          tar -czf ../MUSLIM-VPS-CLOUD-android-armv7.tar.gz .
-
-      - name: Upload build
-        uses: actions/upload-artifact@v4
-        with:
-          name: MUSLIM-VPS-CLOUD-android-armv7
-          path: MUSLIM-VPS-CLOUD-android-armv7.tar.gz
+          name: msc-server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 14
