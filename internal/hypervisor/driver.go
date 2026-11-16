@@ -70,3 +70,38 @@ func ValidateID(id string) error {
     }
     return nil
 }
+
+// UnavailableDriver represents a host without a configured hypervisor.
+type UnavailableDriver struct{}
+
+func (UnavailableDriver) Name() string {
+	return "unavailable"
+}
+
+func (UnavailableDriver) Capabilities() Capabilities {
+	return Capabilities{}
+}
+
+func (UnavailableDriver) Create(context.Context, Spec) error {
+	return ErrNotConfigured
+}
+
+func (UnavailableDriver) Start(context.Context, string) error {
+	return ErrNotConfigured
+}
+
+func (UnavailableDriver) Stop(context.Context, string) error {
+	return ErrNotConfigured
+}
+
+func (UnavailableDriver) Restart(context.Context, string) error {
+	return ErrNotConfigured
+}
+
+func (UnavailableDriver) Delete(context.Context, string) error {
+	return ErrNotConfigured
+}
+
+func (UnavailableDriver) Status(context.Context, string) (State, error) {
+	return StateUnknown, ErrNotConfigured
+}
